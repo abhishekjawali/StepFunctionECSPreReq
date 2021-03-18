@@ -41,6 +41,9 @@ public class InfraStack extends Stack {
 
         public InfraStack(final Construct scope, final String id, final StackProps props) {
                 super(scope, id, props);
+
+                // Get AWS Account ID
+                String accountId = this.getAccount().toString();
                 
                 // Create VPC
                 Vpc vpc = Vpc.Builder.create(this, "MyVpc").maxAzs(3).build();
@@ -49,39 +52,16 @@ public class InfraStack extends Stack {
                 Cluster cluster = Cluster.Builder.create(this, "MyCluster").vpc(vpc).build();
 
                 // Create 2 S3 buckets
-                String accountId = this.getAccount().toString();// Aws.ACCOUNT_ID.toString();
-
-                // String accountId = "abhi-23434534r3463twf";
                 String preProcessingBucketName = accountId.concat("-").concat("pre-processing-bucket");
-                String mainBucketName = accountId.concat("-").concat("main-processing-bucket");
-                // Bucket preProcessingBucket = new Bucket(this, preProcessingBucketName);
                 Bucket preProcessingBucket = Bucket.Builder.create(this, "pre-processing-bucket")
                                 .bucketName(preProcessingBucketName).autoDeleteObjects(true)
                                 .removalPolicy(RemovalPolicy.DESTROY).build();
-                // Bucket mainBucket = new Bucket(this, mainBucketName);
+                
+                String mainBucketName = accountId.concat("-").concat("main-processing-bucket");
                 Bucket mainBucket = Bucket.Builder.create(this, "main-bucket").bucketName(mainBucketName)
                                 .autoDeleteObjects(true).removalPolicy(RemovalPolicy.DESTROY).build();
 
-                // Configure IAM Roles needed for ECS. As part of this demo, the IAM role should
-                // have the following policies attached to it:
-                // 1. ECS Task execution role policy
-                // 2. S3 put object and get object
-                // 3. ECR repo pull policy
-
-                List<String> s3PolicyActionsList = new ArrayList<String>();
-                s3PolicyActionsList.add("s3:PutObject");
-                s3PolicyActionsList.add("s3:Get*");
-                s3PolicyActionsList.add("s3:List*");
-                // s3PolicyActionsList.add("GetBucketOwnershipControls")
-
-                List<String> s3ResourceList = new ArrayList<String>();
-                s3ResourceList.add(preProcessingBucket.getBucketArn());
-                s3ResourceList.add(mainBucket.getBucketArn());
-
-                PolicyDocument s3PolicyDocument = new PolicyDocument();
-                s3PolicyDocument.addStatements(new PolicyStatement(PolicyStatementProps.builder().effect(Effect.ALLOW)
-                                .actions(s3PolicyActionsList).resources(s3ResourceList).build()));
-                Policy ecsS3Policy = Policy.Builder.create(this, "ECSS3Policy").document(s3PolicyDocument).build();
+        
 
                 Role infraECSExecutionRole = new Role(this, "StepFunctionECSTaskExecutionRole",
                                 RoleProps.builder().assumedBy(new ServicePrincipal("ecs-tasks.amazonaws.com"))
@@ -105,8 +85,6 @@ public class InfraStack extends Stack {
 
                 });
 
-                // ecsS3Policy.attachToRole(infraECSExecutionRole);
-
                 FargateTaskDefinitionProps fargateTaskDefinitionProps = FargateTaskDefinitionProps.builder()
                                 .taskRole(infraECSExecutionRole).executionRole(infraECSExecutionRole).build();
 
@@ -118,10 +96,10 @@ public class InfraStack extends Stack {
                                 fargateTaskDefinitionProps);
                 crudServiceTaskDefinition.addContainer("DefaultContainer",
                                 ContainerDefinitionOptions.builder().image(ContainerImage
-                                                .fromRegistry("public.ecr.aws/e5n9d9z4/abhishekjv/crud-service:latest"))
+                                                .fromRegistry("public.ecr.aws/abhishekjv/main-processing-service:latest"))
                                                 .memoryLimitMiB(512).environment(crudFunctionEnvironment)
                                                 .logging(LogDrivers.awsLogs(AwsLogDriverProps.builder()
-                                                                .streamPrefix("ecs-step-function-crud-service")
+                                                                .streamPrefix("ecs-step-function-main-processing-service")
                                                                 .build()))
                                                 .build());
 
@@ -130,16 +108,15 @@ public class InfraStack extends Stack {
                 preProcessingFunctionEnvironment.put("DESTINATION_BUCKET_NAME", mainBucket.getBucketName());
                 preProcessingFunctionEnvironment.put("AWS_REGION", "");
 
-                // FargateTaskDefinitionProps fargateTaskDefinitionProps =
-                // FargateTaskDefinitionProps.builder().taskRole(infraECSExecutionRole).executionRole(infraECSExecutionRole).build();
+               
                 TaskDefinition preProcessingServiceTaskDefinition = new FargateTaskDefinition(this,
                                 "PreProcessingTaskDef", fargateTaskDefinitionProps);
                 preProcessingServiceTaskDefinition.addContainer("DefaultContainer", ContainerDefinitionOptions.builder()
                                 .image(ContainerImage.fromRegistry(
-                                                "public.ecr.aws/e5n9d9z4/abhishekjv/preprocessing-service:latest"))
+                                                "public.ecr.aws/abhishekjv/pre-processing-service:latest"))
                                 .memoryLimitMiB(512).environment(preProcessingFunctionEnvironment)
                                 .logging(LogDrivers.awsLogs(AwsLogDriverProps.builder()
-                                                .streamPrefix("ecs-step-function-preprocessing-service").build()))
+                                                .streamPrefix("ecs-step-function-pre-processing-service").build()))
                                 .build());
 
                 EcsTask ecsTask = EcsTask.Builder.create().cluster(cluster)
@@ -167,11 +144,7 @@ public class InfraStack extends Stack {
                 stepFunctionToECSResourceList.add(preProcessingServiceTaskDefinition.getTaskDefinitionArn());
                 stepFunctionToECSResourceList.add(crudServiceTaskDefinition.getTaskDefinitionArn());
                 stepFunctionToECSResourceList
-                                .add("arn:aws:events:us-east-1:885629272022:rule/StepFunctionsGetEventsForECSTaskRule");// ToDo:
-                                                                                                                        // add
-                                                                                                                        // events
-                                                                                                                        // task
-                                                                                                                        // rule
+                                .add("arn:aws:events:us-east-1:885629272022:rule/StepFunctionsGetEventsForECSTaskRule");
 
                 PolicyDocument stepFunctionToECSPolicyDocument = new PolicyDocument();
                 stepFunctionToECSPolicyDocument.addStatements(new PolicyStatement(PolicyStatementProps.builder()
@@ -198,10 +171,6 @@ public class InfraStack extends Stack {
                                 .build();
                 stepFunctionToXrayPolicy.attachToRole(stepFunctionExecutionRole);
 
-                // CloudTrail
-                // TODO: This is manual step
-
-                // EventBridge
 
                 CfnOutput stepFunctionRle = new CfnOutput(this, "Step Function Execution ROle",
                                 CfnOutputProps.builder().value(stepFunctionExecutionRole.getRoleArn())
